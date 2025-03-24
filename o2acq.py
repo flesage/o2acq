@@ -463,13 +463,11 @@ class MainWindow(QMainWindow):
                 current_frequency=float(self.freq_combo.currentText().split()[0])
             )
 
-            # Configure camera and open shutter
+            # Configure camera 
             em_gain = self.gain_slider.value()
             amp_gain = int(self.amp_combo.currentText())
             exposure_time = int(self.biolum_exposure.text())/1000.0
-            
-            # Open shutter before starting acquisition
-             
+                         
             if not self.camera_controller.start_acquisition(em_gain, amp_gain, exposure_time):
                 raise Exception("Failed to start camera acquisition")
 
