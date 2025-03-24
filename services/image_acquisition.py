@@ -24,7 +24,6 @@ class ImageAcquisitionService(QThread):
         
         # Data storage settings
         self.save_enabled = False
-        self.save_path: Optional[str] = None
         self.saved_images: Dict[str, List[np.ndarray]] = {}
         
         # Performance monitoring
@@ -50,15 +49,6 @@ class ImageAcquisitionService(QThread):
         self.save_enabled = enabled
         self.logger.info(f"Save enabled: {enabled}")
 
-    def set_save_path(self, path: str) -> None:
-        """Set the path for saving acquired images
-        
-        Args:
-            path: Directory path for saving images
-        """
-        self.save_path = path
-        self.logger.info(f"Save path set to: {path}")
-
     def run(self) -> None:
         """Main acquisition loop"""
         self.running = True
@@ -70,11 +60,6 @@ class ImageAcquisitionService(QThread):
         
         while self.running:
             try:
-                # Check if we have active modes
-                if not self.active_modes:
-                    self.msleep(100)  # Avoid busy waiting
-                    continue
-                
                 # Wait for frame with timeout
                 if not self.camera.wait_for_frame(timeout=1000):  # 1 second timeout
                     continue

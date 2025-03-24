@@ -456,10 +456,16 @@ class MainWindow(QMainWindow):
             return
             
         try:
+            # Get active modes first
+            active_modes = self.get_active_modes()
+            if not active_modes:
+                self.logger.warning("Cannot start: No acquisition mode selected")
+                return
+                
             # Update state
             self.state_manager.update_state(
                 acquisition_state=AcquisitionState.RUNNING,
-                active_modes=self.get_active_modes(),
+                active_modes=active_modes,
                 current_frequency=float(self.freq_combo.currentText().split()[0])
             )
 
@@ -490,17 +496,9 @@ class MainWindow(QMainWindow):
                 self.logger
             )
             self.acq_service.image_acquired.connect(self.handle_new_image)
-            self.acq_service.set_active_modes(self.state_manager.state.active_modes)
+            self.acq_service.set_active_modes(active_modes)
             self.acq_service.set_save_enabled(self.save_toggle.isChecked())
             
-            if self.save_toggle.isChecked():
-                save_path = self.save_dir_label.text().replace('Save directory:\n', '')
-                if save_path and save_path != "No directory selected":
-                    self.acq_service.set_save_path(save_path)
-                else:
-                    self.logger.warning("No save directory selected, saving disabled")
-                    self.save_toggle.setChecked(False)
-                
             self.acq_service.start()
             
             # Update UI
