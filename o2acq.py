@@ -521,8 +521,20 @@ class MainWindow(QMainWindow):
             amp_gain = int(self.amp_combo.currentText())
             exposure_time = int(self.biolum_exposure.text())/1000.0
                          
-            if not self.camera_controller.start_acquisition(em_gain, amp_gain, exposure_time):
+            if not self.camera_controller.start_acquisition(em_gain, amp_gain):
                 raise Exception("Failed to start camera acquisition")
+            
+            # Start image acquisition service (need to start first so that first triggered image is read)
+            self.acq_service = ImageAcquisitionService(
+                self.camera_controller.camera,
+                self.logger
+            )
+            self.acq_service.set_frame_timeout(freq)  # Set appropriate timeout
+            self.acq_service.image_acquired.connect(self.handle_new_image)
+            self.acq_service.acquisition_error.connect(self.handle_acquisition_error)
+            self.acq_service.set_active_modes(active_modes)
+            self.acq_service.set_save_enabled(self.save_toggle.isChecked())
+            self.acq_service.start()
 
             # Start NI-DAQ
             freq = self.state_manager.state.current_frequency
@@ -538,17 +550,7 @@ class MainWindow(QMainWindow):
             if not self.daq_controller.start_task(freq, modes, biolum_exp, fluo_exp):
                 raise Exception("Failed to start DAQ task")
 
-            # Start image acquisition service
-            self.acq_service = ImageAcquisitionService(
-                self.camera_controller.camera,
-                self.logger
-            )
-            self.acq_service.set_frame_timeout(freq)  # Set appropriate timeout
-            self.acq_service.image_acquired.connect(self.handle_new_image)
-            self.acq_service.acquisition_error.connect(self.handle_acquisition_error)
-            self.acq_service.set_active_modes(active_modes)
-            self.acq_service.set_save_enabled(self.save_toggle.isChecked())
-            self.acq_service.start()
+
             
             # Update UI
             self.start_button.setEnabled(False)
