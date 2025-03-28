@@ -36,24 +36,27 @@ Usage
 2. Interface Controls:
 
    Camera Settings:
-   - Camera ROI: Select region of interest on the camera
-   - Shutter: Open/close camera shutter
-   - Frequency: Select acquisition frequency (0.5-5 Hz)
-   - EM Gain: Set electron multiplication gain (0-500)
+   - Temperature: Current camera temperature and stabilization status
+   - Temperature Override: Option to start acquisition without temperature stabilization
+   - EM Gain: Set electron multiplication gain (0-300)
    - Amp Gain: Set amplifier gain (1-3)
    - Exposure times:
      * Bioluminescence: Default 700ms
      * Fluorescence: Default 10ms
 
-   Illumination:
-   - Bioluminescence
-   - Blue
-   - Green
-   - Select which modes to use during acquisition
+   Acquisition Settings:
+   - Frequency: Select acquisition frequency (0.5-30 Hz)
+   - Mode Selection:
+     * Bioluminescence
+     * Blue
+     * Green
+   - At least one mode must be selected to start acquisition
+   - Exposure times are automatically adjusted based on selected frequency
 
-   View Settings:
-   - Dataplot ROI: Select region for plotting
-   - Image Source: Switch between active illumination modes
+   Display Settings:
+   - Display Mode: Switch between active acquisition modes
+   - ROI: Select region of interest for intensity plotting
+   - Real-time intensity plot for selected mode
 
    Save Settings:
    - Enable/disable saving
@@ -65,11 +68,12 @@ Operation
 --------
 
 1. Configure camera settings as needed
-2. Select desired illumination modes
+2. Select desired illumination modes (at least one required)
 3. Enable saving if desired and select save directory
-4. Click Start to begin acquisition
-5. Use the Image Source dropdown to view different channels
-6. Click Stop to end acquisition and save data (if enabled)
+4. Wait for temperature stabilization (or use override if needed)
+5. Click Start to begin acquisition
+6. Use the Display Mode dropdown to view different channels
+7. Click Stop to end acquisition and save data (if enabled)
 
 Logging
 -------
@@ -83,26 +87,53 @@ Digital Output Configuration
 --------------------------
 
 The NI-DAQ digital outputs are configured as follows:
-- Port 0, Line 0: Camera exposure trigger
-- Port 0, Line 1: Bioluminescence trigger
-- Port 0, Line 2: Blue illumination trigger
-- Port 0, Line 3: Green illumination trigger
+- Port 0: 8-bit digital output port
+- Bit 0: Bioluminescence mode (no illumination line needed)
+- Bit 1: Blue illumination trigger
+- Bit 2: Green illumination trigger
+- Bit 4: Camera exposure trigger (always active during acquisition)
+
+The pattern is generated based on the selected modes and exposure times:
+- For bioluminescence: Only bit 4 (exposure trigger) is active
+- For blue/green: Both the mode-specific bit (1 or 2) and bit 4 (exposure trigger) are active
+- The pattern repeats at the selected acquisition frequency
+- Exposure times are automatically adjusted to fit within the acquisition period
 
 Troubleshooting
 --------------
 
-1. Camera not found:
-   - Ensure Andor SDK2 is properly installed
-   - Check USB connection
-   - Verify camera power
+1. Temperature Issues:
+   - Wait for temperature stabilization
+   - Use temperature override if needed
+   - Check camera cooling system
 
-2. DAQ errors:
-   - Check NI-DAQmx installation
-   - Verify device name (default: "Dev1")
-   - Check device connections
+2. Acquisition Issues:
+   - Ensure at least one mode is selected
+   - Check exposure times don't exceed period (automatically adjusted)
+   - Verify camera and DAQ connections
 
-3. Saving errors:
-   - Verify write permissions in save directory
-   - Ensure sufficient disk space
+3. Saving Issues:
+   - Ensure save directory is selected
+   - Check disk space
+   - Verify write permissions
+
+Recent Changes
+-------------
+
+1. Image Acquisition:
+   - Improved mode validation before starting acquisition
+   - Added separate ROI tracking for each mode
+   - Enhanced frame rate monitoring per mode
+   - Added temperature override option
+
+2. Display:
+   - Added mode-specific display selection
+   - Improved ROI intensity plotting per mode
+   - Enhanced image display updates
+
+3. Performance:
+   - Optimized frame timeout based on acquisition frequency
+   - Added frame rate monitoring and logging
+   - Improved error handling and recovery
 
 For additional issues, check the log file for detailed error messages. 
