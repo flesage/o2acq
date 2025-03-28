@@ -28,16 +28,35 @@ class DataStorageService:
             self.logger.error("No save path set")
             return False
 
+        if not saved_images:
+            self.logger.error("No images provided to save")
+            return False
+
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             for mode, images in saved_images.items():
-                if images:
+                # Add more detailed logging
+                self.logger.debug(f"Processing {mode}: {len(images) if images else 0} images")
+                
+                if not images or len(images) == 0:
+                    self.logger.warning(f"No images to save for {mode}")
+                    continue
+                
+                try:
                     image_stack = np.stack(images)
                     filename = f"{mode}_{timestamp}.tiff"
                     tiff_path = os.path.join(self.save_path, filename)
+                    
+                    # Log stack details
+                    self.logger.debug(f"Image stack shape: {image_stack.shape}, dtype: {image_stack.dtype}")
+                    
                     tifffile.imwrite(tiff_path, image_stack)
                     self.logger.info(f"Saved {len(images)} {mode} images to {tiff_path}")
+                except Exception as e:
+                    self.logger.error(f"Error saving {mode} images: {e}")
+                    continue
+                    
             return True
             
         except Exception as e:

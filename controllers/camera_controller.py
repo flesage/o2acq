@@ -14,8 +14,8 @@ class CameraController:
             self.camera = Andor.AndorSDK2Camera(temperature=self.target_temperature, fan_mode="full")
             self.camera.set_temperature(self.target_temperature)
             self.camera.set_cooler(True)
-            self.camera.set_trigger_mode("int")
-            self.camera.set_exposure(0.1)
+            self.camera.set_trigger_mode("ext_exp")
+            #self.camera.set_exposure(0.1)
             
             # Get and log available amplifier modes
             amp_modes = self.camera.get_all_amp_modes()
@@ -35,9 +35,9 @@ class CameraController:
             self.camera.set_amp_mode(amp_gain)
             
             self.logger.info("Set trigger mode to external")
-            self.camera.set_trigger_mode("ext")
+            self.camera.set_trigger_mode("ext_exp")
             
-            self.camera.set_exposure(exposure_time)
+            #self.camera.set_exposure(exposure_time)
             
             self.logger.info("Opened shutter")
             self.camera.setup_shutter("open")

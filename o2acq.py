@@ -6,9 +6,10 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QPushButton, QComboBox, QLabel, 
                            QFileDialog, QCheckBox, QGroupBox, QLineEdit,
                            QSlider, QSizePolicy, QMessageBox)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 import pyqtgraph as pg
 import numpy as np
+from typing import List
 
 from controllers.camera_controller import CameraController
 from controllers.nidaq_controller import NIDAQController
@@ -78,14 +79,24 @@ class MainWindow(QMainWindow):
                 temperature_stabilized=False
             )
             
-            # Initialize ROI data
-            self.roi = None
-            self.roi_data = []
+            # Initialize ROI data with separate lists for each mode
+            self.roi_data = {
+                "Bioluminescence": [],
+                "Blue": [],
+                "Green": []
+            }
             self.roi_plot = None
             
             # Temperature labels
             self.temp_value_label = None
             self.temp_status_label = None
+            
+            # Initialize image storage for each mode
+            self.current_images = {
+                "Bioluminescence": None,
+                "Blue": None,
+                "Green": None
+            }
             
             # Setup UI
             self.setup_ui()
@@ -127,6 +138,16 @@ class MainWindow(QMainWindow):
         image_container = QWidget()
         image_layout = QVBoxLayout(image_container)
         image_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add display mode selection
+        display_layout = QHBoxLayout()
+        display_layout.addWidget(QLabel("Display Mode:"))
+        self.display_mode_combo = QComboBox()
+        self.display_mode_combo.addItems(["Bioluminescence", "Blue", "Green"])
+        self.display_mode_combo.currentTextChanged.connect(self.on_display_mode_changed)
+        display_layout.addWidget(self.display_mode_combo)
+        display_layout.addStretch()
+        image_layout.addLayout(display_layout)
         
         # Image display
         self.image_view = pg.ImageView()
@@ -173,16 +194,21 @@ class MainWindow(QMainWindow):
         if self.image_view.image is None:
             return
             
+        # Get current mode
+        current_mode = self.display_mode_combo.currentText()
+        if not current_mode:
+            return
+            
         # Get ROI data
         roi_data = self.roi.getArrayRegion(self.image_view.image, self.image_view.imageItem)
         
         if roi_data is not None:
             # Calculate mean intensity in ROI
             mean_intensity = np.mean(roi_data)
-            self.roi_data.append(mean_intensity)
+            self.roi_data[current_mode].append(mean_intensity)
             
-            # Update plot
-            self.roi_plot.setData(self.roi_data)
+            # Update plot for current mode
+            self.roi_plot.setData(self.roi_data[current_mode])
 
     def setup_control_panel(self):
         """Setup the right control panel"""
@@ -203,6 +229,12 @@ class MainWindow(QMainWindow):
         temp_layout.addWidget(self.temp_status_label)
         temp_layout.addStretch()
         camera_layout.addLayout(temp_layout)
+
+        # Add override checkbox
+        self.temp_override_check = QCheckBox("Allow start without temperature stabilization")
+        self.temp_override_check.setChecked(False)
+        self.temp_override_check.stateChanged.connect(self.update_start_button_state)
+        camera_layout.addWidget(self.temp_override_check)
         
         # EM gain
         gain_layout = QHBoxLayout()
@@ -249,16 +281,18 @@ class MainWindow(QMainWindow):
         self.blue_check.stateChanged.connect(self.update_start_button_state)
         self.green_check.stateChanged.connect(self.update_start_button_state)
         
-        # Exposure times
+        # Exposure times with validation
         biolum_exp_layout = QHBoxLayout()
         biolum_exp_layout.addWidget(QLabel("Biolum Exp (ms):"))
         self.biolum_exposure = QLineEdit("700")
+        self.biolum_exposure.textChanged.connect(lambda: self.validate_exposure_time(self.biolum_exposure))
         biolum_exp_layout.addWidget(self.biolum_exposure)
         acq_layout.addLayout(biolum_exp_layout)
         
         fluo_exp_layout = QHBoxLayout()
         fluo_exp_layout.addWidget(QLabel("Fluo Exp (ms):"))
         self.fluo_exposure = QLineEdit("10")
+        self.fluo_exposure.textChanged.connect(lambda: self.validate_exposure_time(self.fluo_exposure))
         fluo_exp_layout.addWidget(self.fluo_exposure)
         acq_layout.addLayout(fluo_exp_layout)
         
@@ -266,7 +300,8 @@ class MainWindow(QMainWindow):
         freq_layout = QHBoxLayout()
         freq_layout.addWidget(QLabel("Frequency:"))
         self.freq_combo = QComboBox()
-        self.freq_combo.addItems(['0.5 Hz', '1 Hz', '2 Hz'])
+        self.freq_combo.addItems(['0.5 Hz', '1 Hz', '2 Hz', '30 Hz'])
+        self.freq_combo.currentTextChanged.connect(self.on_frequency_changed)
         freq_layout.addWidget(self.freq_combo)
         acq_layout.addLayout(freq_layout)
         
@@ -349,16 +384,13 @@ class MainWindow(QMainWindow):
                 # Update start button state
                 self.update_start_button_state()
                 
-                # Log temperature update
-                self.logger.debug(f"Temperature updated in GUI: {temp:.1f}°C, Status: {status}")
-                
         except Exception as e:
             self.logger.error(f"Error updating temperature: {e}")
 
     def validate_acquisition_ready(self) -> bool:
         """Check if system is ready for acquisition"""
-        # Check temperature stabilization
-        if not self.state_manager.state.temperature_stabilized:
+        # Check temperature stabilization (unless override is checked)
+        if not self.state_manager.state.temperature_stabilized and not self.temp_override_check.isChecked():
             self.logger.warning("Cannot start: Temperature not stabilized")
             return False
             
@@ -377,7 +409,7 @@ class MainWindow(QMainWindow):
         
         if not ready:
             tooltip = []
-            if not self.state_manager.state.temperature_stabilized:
+            if not self.state_manager.state.temperature_stabilized and not self.temp_override_check.isChecked():
                 tooltip.append("Temperature not stabilized")
             if not self.get_active_modes():
                 tooltip.append("No acquisition mode selected")
@@ -433,10 +465,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'temp_timer'):
                 self.temp_timer.stop()
                 
-            if hasattr(self, 'state_manager') and \
-               self.state_manager.state.acquisition_state == AcquisitionState.RUNNING:
-                self.stop_acquisition()
-            
+            if hasattr(self, 'acq_service'):
+                self.acq_service.stop()
+                
             if hasattr(self, 'camera_controller') and self.camera_controller.camera is not None:
                 # Ensure shutter is closed
                 self.logger.info("Closing camera shutter...")
@@ -462,11 +493,27 @@ class MainWindow(QMainWindow):
                 self.logger.warning("Cannot start: No acquisition mode selected")
                 return
                 
+            # Clear ROI data for active modes
+            self.roi_data = {mode: [] for mode in active_modes}
+            self.roi_plot.setData([])  # Clear plot
+
+            # Clear current images
+            self.current_images = {mode: None for mode in active_modes}
+            
+            # Update display mode options to only show active modes
+            self.display_mode_combo.clear()
+            self.display_mode_combo.addItems(active_modes)
+            self.display_mode_combo.setCurrentIndex(0)  # Select first active mode
+            
+            # Clear current display
+            self.image_view.clear()
+
             # Update state
+            frequency = float(self.freq_combo.currentText().split()[0])
             self.state_manager.update_state(
                 acquisition_state=AcquisitionState.RUNNING,
                 active_modes=active_modes,
-                current_frequency=float(self.freq_combo.currentText().split()[0])
+                current_frequency=frequency
             )
 
             # Configure camera 
@@ -480,9 +527,10 @@ class MainWindow(QMainWindow):
             # Start NI-DAQ
             freq = self.state_manager.state.current_frequency
             modes = [
-                self.biolum_check.isChecked(),
-                self.blue_check.isChecked(),
-                self.green_check.isChecked()
+                "Bioluminescence" in active_modes,
+                "Blue" in active_modes,
+                "Green" in active_modes,
+                True  # Line 4 always active for exposure triggers
             ]
             biolum_exp = int(self.biolum_exposure.text())
             fluo_exp = int(self.fluo_exposure.text())
@@ -495,10 +543,11 @@ class MainWindow(QMainWindow):
                 self.camera_controller.camera,
                 self.logger
             )
+            self.acq_service.set_frame_timeout(freq)  # Set appropriate timeout
             self.acq_service.image_acquired.connect(self.handle_new_image)
+            self.acq_service.acquisition_error.connect(self.handle_acquisition_error)
             self.acq_service.set_active_modes(active_modes)
             self.acq_service.set_save_enabled(self.save_toggle.isChecked())
-            
             self.acq_service.start()
             
             # Update UI
@@ -516,6 +565,28 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'acq_service'):
                 self.acq_service.stop()
                 
+                # Add debug logging for saved images
+                if hasattr(self.acq_service, 'saved_images'):
+                    for mode, images in self.acq_service.saved_images.items():
+                        self.logger.debug(f"Mode {mode}: {len(images) if images else 0} images collected")
+                
+                # Save data if enabled
+                if (self.save_toggle.isChecked() and 
+                    hasattr(self.acq_service, 'saved_images') and 
+                    any(len(imgs) > 0 for imgs in self.acq_service.saved_images.values())):
+                    
+                    self.logger.info("Saving acquired images...")
+                    if not self.data_storage.save_path:
+                        self.logger.error("Cannot save: No save directory selected")
+                    else:
+                        success = self.data_storage.save_image_stacks(self.acq_service.saved_images)
+                        if not success:
+                            self.logger.error("Failed to save image stacks")
+                else:
+                    self.logger.warning("No images to save or saving disabled")
+                
+                delattr(self, 'acq_service')
+                
             # Stop NI-DAQ
             self.daq_controller.stop_task()
             
@@ -523,12 +594,6 @@ class MainWindow(QMainWindow):
             self.camera_controller.stop_acquisition()
             self.logger.info("Closing camera shutter...")
             self.camera_controller.camera.setup_shutter("closed")
-            
-            # Save data if enabled
-            if (self.save_toggle.isChecked() and 
-                hasattr(self, 'acq_service') and 
-                self.acq_service.saved_images):
-                self.data_storage.save_image_stacks(self.acq_service.saved_images)
             
             # Update state
             self.state_manager.update_state(
@@ -539,32 +604,49 @@ class MainWindow(QMainWindow):
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             
+            # Clear current images and display
+            self.current_images = {
+                "Bioluminescence": None,
+                "Blue": None,
+                "Green": None
+            }
+            self.image_view.clear()
+            
+            # Reset display mode options to all possible modes
+            self.display_mode_combo.clear()
+            self.display_mode_combo.addItems(["Bioluminescence", "Blue", "Green"])
+            
             # Clear ROI data
-            self.roi_data = []
-            self.roi_plot.setData(self.roi_data)
+            self.roi_data = {
+                "Bioluminescence": [],
+                "Blue": [],
+                "Green": []
+            }
+            self.roi_plot.setData([])  # Clear plot
             
         except Exception as e:
             self.logger.error(f"Error stopping acquisition: {e}")
-        finally:
-            if hasattr(self, 'acq_service'):
-                delattr(self, 'acq_service')
 
     def handle_new_image(self, mode: str, image_data: np.ndarray):
         """Handle newly acquired image"""
         try:
-            # Update image display
-            self.image_view.setImage(image_data, autoLevels=True)
+            # Store the new image for this mode
+            self.current_images[mode] = image_data.copy()
             
-            # Update ROI data
-            self.update_roi()
-            
-            # Log image levels for debugging
-            levels = self.image_view.getImageItem().getLevels()
-            if levels is not None:
-                self.logger.debug(f"Updated display with {mode} image, levels: {levels[0]:.1f}-{levels[1]:.1f}")
+            # Force update display if this is the selected mode
+            selected_mode = self.display_mode_combo.currentText()
+            if mode == selected_mode:
+                self.update_display(mode)
                 
         except Exception as e:
             self.logger.error(f"Error handling new image: {e}")
+
+    def handle_acquisition_error(self, error_msg):
+        """Handle errors from acquisition service"""
+        self.logger.error(f"Acquisition error: {error_msg}")
+        QMessageBox.critical(self, "Acquisition Error",
+                           f"Error during acquisition: {error_msg}")
+        self.stop_acquisition()
 
     def resizeEvent(self, event):
         """Handle window resize event to maintain image aspect ratio"""
@@ -574,6 +656,93 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'image_view'):
             view_box = self.image_view.getView()
             view_box.setAspectLocked(True, 1.0)  # Lock aspect ratio to 1:1
+
+    def update_display_modes(self, active_modes: List[str]):
+        """Update the display mode combo box with active modes"""
+        current = self.display_mode_combo.currentText()
+        self.display_mode_combo.clear()
+        self.display_mode_combo.addItems(active_modes)
+        
+        # Try to restore previous selection if still available
+        index = self.display_mode_combo.findText(current)
+        if index >= 0:
+            self.display_mode_combo.setCurrentIndex(index)
+
+    def on_display_mode_changed(self, mode: str):
+        """Handle display mode selection change"""
+        try:
+            self.update_display(mode)
+            # Update plot for new mode
+            if mode in self.roi_data:
+                self.roi_plot.setData(self.roi_data[mode])
+        except Exception as e:
+            self.logger.error(f"Error changing display mode: {e}")
+
+    def update_display(self, mode: str):
+        """Update display with current image for specified mode"""
+        try:
+            if mode in self.current_images and self.current_images[mode] is not None:
+                self.image_view.setImage(self.current_images[mode], autoLevels=True)
+                self.update_roi()
+        except Exception as e:
+            self.logger.error(f"Error updating display: {e}")
+
+    def on_frequency_changed(self, freq_text: str):
+        """Adjust exposure times when frequency changes to ensure they don't exceed the period"""
+        try:
+            # Get frequency in Hz
+            frequency = float(freq_text.split()[0])
+            period_ms = int((1.0 / frequency) * 1000)  # Convert period to milliseconds
+            
+            # Add 10% margin for safety
+            max_exposure = int(period_ms * 0.9)
+            
+            # Get current exposure times
+            biolum_exp = int(self.biolum_exposure.text())
+            fluo_exp = int(self.fluo_exposure.text())
+            
+            # Adjust if needed
+            if biolum_exp > max_exposure:
+                self.biolum_exposure.setText(str(max_exposure))
+                self.logger.info(f"Adjusted bioluminescence exposure to {max_exposure}ms to fit {frequency}Hz")
+                
+            if fluo_exp > max_exposure:
+                self.fluo_exposure.setText(str(max_exposure))
+                self.logger.info(f"Adjusted fluorescence exposure to {max_exposure}ms to fit {frequency}Hz")
+                
+            # For 30 Hz, ensure exposures don't go below 1ms
+            if frequency == 30:
+                min_exposure = 1
+                if fluo_exp < min_exposure:
+                    self.fluo_exposure.setText(str(min_exposure))
+                if biolum_exp < min_exposure:
+                    self.biolum_exposure.setText(str(min_exposure))
+                
+        except Exception as e:
+            self.logger.error(f"Error adjusting exposure times: {e}")
+
+    def validate_exposure_time(self, exposure_input: QLineEdit):
+        """Validate and adjust exposure time input"""
+        try:
+            # Get current frequency
+            frequency = float(self.freq_combo.currentText().split()[0])
+            period_ms = int((1.0 / frequency) * 1000)
+            max_exposure = int(period_ms * 0.9)  # 90% of period
+            
+            # Get current value
+            try:
+                current_value = int(exposure_input.text())
+            except ValueError:
+                exposure_input.setText("0")
+                return
+                
+            # Adjust if too large
+            if current_value > max_exposure:
+                exposure_input.setText(str(max_exposure))
+                self.logger.info(f"Adjusted exposure time to {max_exposure}ms to fit {frequency}Hz")
+                
+        except Exception as e:
+            self.logger.error(f"Error validating exposure time: {e}")
 
 def main():
     app = QApplication(sys.argv)

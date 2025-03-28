@@ -7,7 +7,7 @@ from typing import List, Optional
 class NIDAQController:
     """Controller for National Instruments DAQ device"""
     
-    def __init__(self, logger: logging.Logger, device: str = "Dev1"):
+    def __init__(self, logger: logging.Logger, device: str = "IOIFAST"):
         self.logger = logger
         self.device = device
         self.task: Optional[nidaqmx.Task] = None
@@ -18,7 +18,7 @@ class NIDAQController:
         """Start NI-DAQ task with given parameters
         
         Args:
-            frequency (float): Frequency in Hz
+            frequency (float): Frequency in Hz per mode
             modes (list): List of booleans [biolum, blue, green]
             biolum_exp (int): Bioluminescence exposure time in ms
             fluo_exp (int): Fluorescence exposure time in ms
@@ -30,7 +30,10 @@ class NIDAQController:
             self.logger.warning("Task already running. Stopping previous task.")
             self.stop_task()
             
-        period = 1.0 / frequency
+        # Calculate total period based on number of active modes
+        num_active_modes = sum(modes[:3])  # Count only biolum, blue, green
+        mode_frequency = frequency / num_active_modes if num_active_modes > 0 else frequency
+        period = 1.0 / mode_frequency
         samples_per_period = int(1000 * period)  # 1000 Hz * period
 
         try:
@@ -55,7 +58,7 @@ class NIDAQController:
             self.task.write(self.current_pattern, auto_start=True)
             self.running = True
             
-            self.logger.info(f"Started DAQ task at {frequency}Hz")
+            self.logger.info(f"Started DAQ task at {frequency}Hz (per mode: {mode_frequency:.2f}Hz)")
             self._log_pattern_info(modes, frequency, biolum_exp, fluo_exp)
             return True
             
@@ -77,22 +80,39 @@ class NIDAQController:
         Returns:
             List of integers representing the digital output pattern
         """
-        if not any(modes):
+        if not any(modes[:3]):  # Check first 3 modes
             return [0] * samples_per_period
             
-        pattern = []
-        active_modes = [i for i, mode in enumerate(modes) if mode]
+        pattern = [0] * samples_per_period
+        active_modes = [i for i, mode in enumerate(modes[:3]) if mode]
         
-        for mode_index in active_modes:
-            bit_value = 1 << (mode_index + 1)  # +1 because we start at line 1
-            exp_samples = biolum_exp if mode_index == 0 else fluo_exp
+        # Calculate spacing between modes
+        mode_spacing = samples_per_period // max(len(active_modes), 1)
+        
+        # Process each active mode
+        for idx, mode_index in enumerate(active_modes):
+            start_pos = idx * mode_spacing
             
-            # First exp_samples with exposure signal (line 0) on
-            pattern.extend([bit_value | 1] * exp_samples)
-            # Remaining samples with just illumination
-            pattern.extend([bit_value] * (samples_per_period - exp_samples))
+            # Set mode-specific parameters
+            if mode_index == 0:  # Bioluminescence
+                exp_samples = biolum_exp
+                bit_value = 0  # No illumination line needed
+            else:  # Blue (1) or Green (2)
+                exp_samples = fluo_exp
+                bit_value = 1 << (mode_index + 1)  # Line 1 for blue, line 2 for green
+            
+            # Add mode-specific pattern
+            for i in range(exp_samples):
+                if (start_pos + i) < samples_per_period:
+                    pattern[start_pos + i] |= (bit_value | (1 << 4))  # Mode bit and exposure trigger on line 4
+            
+            # For blue/green, keep illumination on for the fluorescence exposure time
+            if mode_index > 0:  # Blue or Green
+                for i in range(exp_samples):
+                    if (start_pos + i) < samples_per_period:
+                        pattern[start_pos + i] |= bit_value
         
-        return pattern if pattern else [0] * samples_per_period
+        return pattern
 
     def stop_task(self) -> bool:
         """Stop and cleanup the NI-DAQ task
