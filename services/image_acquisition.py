@@ -74,7 +74,8 @@ class ImageAcquisitionService(QThread):
                     continue
                 
                 # Read image data
-                image_data = self.camera.read_newest_image()
+                (image_data, image_info) = self.camera.read_newest_image(return_info=True)
+                print(image_info)
                 if image_data is None:
                     continue
                 
