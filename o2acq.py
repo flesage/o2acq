@@ -557,20 +557,6 @@ class MainWindow(QMainWindow):
             # Stop acquisition service
             if hasattr(self, 'acq_service'):
                 self.acq_service.stop()
-                
-                # Save data if enabled
-                if (self.save_toggle.isChecked() and 
-                    hasattr(self.acq_service, 'saved_images') and 
-                    any(len(imgs) > 0 for imgs in self.acq_service.saved_images.values())):
-                    
-                    self.logger.info("Saving acquired images and frame indices...")
-                    success = self.data_storage.save_image_stacks(
-                        self.acq_service.saved_images,
-                        self.acq_service.frame_indices
-                    )
-                    if not success:
-                        self.logger.error("Failed to save data")
-                
                 delattr(self, 'acq_service')
                 
             # Stop NI-DAQ

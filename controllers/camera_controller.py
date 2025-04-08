@@ -37,8 +37,14 @@ class CameraController:
             self.camera.set_EMCCD_gain(em_gain)
             
             self.logger.info(f"Set amplifier gain to {amp_gain}")
-            self.camera.set_amp_mode(amp_gain)
-            
+            if(exposure_time > 0.5):
+                self.camera.set_amp_mode(amp_gain, hsspeed=3)
+                self.logger.info(f"Set hs speed to 3")
+            else:
+                self.camera.set_amp_mode(amp_gain, hsspeed=0)  
+                self.logger.info(f"Set hs speed to 0")
+    
+
             self.logger.info("Set trigger mode to external")
             self.camera.set_trigger_mode("ext_exp")
             
