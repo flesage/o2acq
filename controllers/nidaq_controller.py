@@ -32,7 +32,8 @@ class NIDAQController:
             
         # Calculate total period based on number of active modes
         num_active_modes = sum(modes[:3])  # Count only biolum, blue, green
-        mode_frequency = frequency / num_active_modes if num_active_modes > 0 else frequency
+        # Only divide frequency if we have more than one mode
+        mode_frequency = frequency if num_active_modes <= 1 else frequency / num_active_modes
         period = 1.0 / mode_frequency
         samples_per_period = int(1000 * period)  # 1000 Hz * period
 
@@ -58,7 +59,8 @@ class NIDAQController:
             self.task.write(self.current_pattern, auto_start=True)
             self.running = True
             
-            self.logger.info(f"Started DAQ task at {frequency}Hz (per mode: {mode_frequency:.2f}Hz)")
+            actual_freq = mode_frequency if num_active_modes <= 1 else f"{mode_frequency:.2f} per mode"
+            self.logger.info(f"Started DAQ task at {frequency}Hz (actual: {actual_freq}Hz)")
             self._log_pattern_info(modes, frequency, biolum_exp, fluo_exp)
             return True
             

@@ -24,8 +24,14 @@ class CameraController:
             self.logger.error(f"Error initializing camera: {e}")
             self.camera = None
 
-    def start_acquisition(self, em_gain, amp_gain):
-        """Start camera acquisition with specified settings"""
+    def start_acquisition(self, em_gain, amp_gain, exposure_time):
+        """Start camera acquisition with specified settings
+        
+        Args:
+            em_gain: EM gain value
+            amp_gain: Amplifier gain value
+            exposure_time: Exposure time in seconds
+        """
         try:
             self.logger.info(f"Set EM gain to {em_gain}")
             self.camera.set_EMCCD_gain(em_gain)
@@ -35,6 +41,9 @@ class CameraController:
             
             self.logger.info("Set trigger mode to external")
             self.camera.set_trigger_mode("ext_exp")
+            
+            self.logger.info(f"Set exposure time to {exposure_time:.3f}s")
+            self.camera.set_exposure(exposure_time)
                         
             self.logger.info("Opened shutter")
             self.camera.setup_shutter("open")

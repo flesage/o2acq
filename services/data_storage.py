@@ -22,45 +22,39 @@ class DataStorageService:
         self.logger.info(f"Save path set to: {path}")
         return True
 
-    def save_image_stacks(self, saved_images):
-        """Save accumulated images as TIFF stacks"""
+    def save_image_stacks(self, saved_images, frame_indices):
+        """Save accumulated images as TIFF stacks and frame indices as NPY files
+        
+        Args:
+            saved_images: Dictionary of image lists per mode
+            frame_indices: Dictionary of frame index lists per mode
+        """
         if not self.save_path:
             self.logger.error("No save path set")
-            return False
-
-        if not saved_images:
-            self.logger.error("No images provided to save")
             return False
 
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
-            for mode, images in saved_images.items():
-                # Add more detailed logging
-                self.logger.debug(f"Processing {mode}: {len(images) if images else 0} images")
-                
-                if not images or len(images) == 0:
-                    self.logger.warning(f"No images to save for {mode}")
-                    continue
-                
-                try:
-                    image_stack = np.stack(images)
-                    filename = f"{mode}_{timestamp}.tiff"
-                    tiff_path = os.path.join(self.save_path, filename)
-                    
-                    # Log stack details
-                    self.logger.debug(f"Image stack shape: {image_stack.shape}, dtype: {image_stack.dtype}")
-                    
+            for mode in saved_images:
+                if saved_images[mode]:
+                    # Save image stack
+                    image_stack = np.stack(saved_images[mode])
+                    tiff_path = os.path.join(self.save_path, f"{mode}_{timestamp}.tiff")
                     tifffile.imwrite(tiff_path, image_stack)
-                    self.logger.info(f"Saved {len(images)} {mode} images to {tiff_path}")
-                except Exception as e:
-                    self.logger.error(f"Error saving {mode} images: {e}")
-                    continue
                     
+                    # Save frame indices
+                    if mode in frame_indices and frame_indices[mode]:
+                        indices_array = np.array(frame_indices[mode])
+                        npy_path = os.path.join(self.save_path, f"{mode}_{timestamp}_frames.npy")
+                        np.save(npy_path, indices_array)
+                        
+                    self.logger.info(f"Saved {len(saved_images[mode])} {mode} images to {tiff_path}")
+                    self.logger.info(f"Saved frame indices to {npy_path}")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error saving image stacks: {e}")
+            self.logger.error(f"Error saving data: {e}")
             return False
 
     def save_metadata(self, metadata, filename):

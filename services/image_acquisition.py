@@ -26,6 +26,7 @@ class ImageAcquisitionService(QThread):
         # Data storage settings
         self.save_enabled = False
         self.saved_images: Dict[str, List[np.ndarray]] = {}
+        self.frame_indices: Dict[str, List[int]] = {}  # Add frame indices tracking
         
         # Performance monitoring
         self.last_frame_times: Dict[str, datetime] = {}
@@ -39,6 +40,7 @@ class ImageAcquisitionService(QThread):
         """
         self.active_modes = modes
         self.saved_images = {mode: [] for mode in modes}
+        self.frame_indices = {mode: [] for mode in modes}  # Initialize frame indices
         self.logger.info(f"Active modes set to: {', '.join(modes)}")
 
     def set_save_enabled(self, enabled: bool) -> None:
@@ -73,34 +75,32 @@ class ImageAcquisitionService(QThread):
                     self.logger.warning(f"Timeout waiting for frame after {self.frame_timeout}ms")
                     continue
                 
-                # Read image data
-                (image_data, image_info) = self.camera.read_newest_image(return_info=True)
-                print(image_info)
+                # Read image data (includes frame info)
+                image_data,frame_info = self.camera.read_newest_image(return_info=True)
+                print(frame_info)
                 if image_data is None:
                     continue
                 
                 # Calculate current mode based on counter
-                current_mode = self.active_modes[self.image_counter % len(self.active_modes)]
+                current_mode = self.active_modes[frame_info.frame_index % len(self.active_modes)]
                 
-                # Calculate frame interval for this mode
-                current_time = datetime.now()
-                if current_mode in self.last_frame_times:
-                    interval = (current_time - self.last_frame_times[current_mode]).total_seconds()
-                    # Only store intervals for the same mode
-                    self.frame_intervals[current_mode].append(interval)
-                    # Keep only last 10 intervals per mode
-                    if len(self.frame_intervals[current_mode]) > 10:
-                        self.frame_intervals[current_mode] = self.frame_intervals[current_mode][-10:]
-                
-                self.last_frame_times[current_mode] = current_time
+                # Store frame index if saving is enabled
+                if self.save_enabled:
+                    self.frame_indices[current_mode].append(frame_info.frame_index)
+                    self.saved_images[current_mode].append(image_data.copy())
                 
                 # Emit the image for display
                 self.image_acquired.emit(current_mode, image_data)
                 
-                # Store for saving if enabled
-                if self.save_enabled:
-                    self.saved_images[current_mode].append(image_data.copy())
+                # Update timing information
+                current_time = datetime.now()
+                if current_mode in self.last_frame_times:
+                    interval = (current_time - self.last_frame_times[current_mode]).total_seconds()
+                    self.frame_intervals[current_mode].append(interval)
+                    if len(self.frame_intervals[current_mode]) > 10:
+                        self.frame_intervals[current_mode] = self.frame_intervals[current_mode][-10:]
                 
+                self.last_frame_times[current_mode] = current_time
                 self.image_counter += 1
                 
                 # Log frame rate periodically
@@ -111,7 +111,7 @@ class ImageAcquisitionService(QThread):
                 error_msg = f"Error in acquisition loop: {str(e)}"
                 self.logger.error(error_msg)
                 self.acquisition_error.emit(error_msg)
-                self.msleep(100)  # Add delay on error
+                self.msleep(100)
                 continue
 
     def _log_frame_rates(self):

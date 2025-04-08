@@ -143,8 +143,7 @@ class MainWindow(QMainWindow):
         display_layout = QHBoxLayout()
         display_layout.addWidget(QLabel("Display Mode:"))
         self.display_mode_combo = QComboBox()
-        self.display_mode_combo.addItems(["Bioluminescence", "Blue", "Green"])
-        self.display_mode_combo.currentTextChanged.connect(self.on_display_mode_changed)
+        # Don't add items here - will be updated when modes are selected
         display_layout.addWidget(self.display_mode_combo)
         display_layout.addStretch()
         image_layout.addLayout(display_layout)
@@ -276,10 +275,13 @@ class MainWindow(QMainWindow):
         acq_layout.addWidget(self.blue_check)
         acq_layout.addWidget(self.green_check)
         
-        # Connect mode checkboxes to start button update
-        self.biolum_check.stateChanged.connect(self.update_start_button_state)
-        self.blue_check.stateChanged.connect(self.update_start_button_state)
-        self.green_check.stateChanged.connect(self.update_start_button_state)
+        # Connect mode checkboxes to updates
+        self.biolum_check.stateChanged.connect(self.update_display_modes)
+        self.blue_check.stateChanged.connect(self.update_display_modes)
+        self.green_check.stateChanged.connect(self.update_display_modes)
+        
+        # Initial update of display modes
+        self.update_display_modes()
         
         # Exposure times with validation
         biolum_exp_layout = QHBoxLayout()
@@ -493,21 +495,14 @@ class MainWindow(QMainWindow):
                 self.logger.warning("Cannot start: No acquisition mode selected")
                 return
                 
-            # Clear ROI data for active modes
-            self.roi_data = {mode: [] for mode in active_modes}
-            self.roi_plot.setData([])  # Clear plot
+            # Update display mode options to only show active modes
+            self.display_mode_combo.clear()
+            self.display_mode_combo.addItems(active_modes)
+            self.display_mode_combo.setCurrentIndex(0)
 
             # Clear current images
             self.current_images = {mode: None for mode in active_modes}
             
-            # Update display mode options to only show active modes
-            self.display_mode_combo.clear()
-            self.display_mode_combo.addItems(active_modes)
-            self.display_mode_combo.setCurrentIndex(0)  # Select first active mode
-            
-            # Clear current display
-            self.image_view.clear()
-
             # Update state
             frequency = float(self.freq_combo.currentText().split()[0])
             self.state_manager.update_state(
@@ -521,23 +516,10 @@ class MainWindow(QMainWindow):
             amp_gain = int(self.amp_combo.currentText())
             exposure_time = int(self.biolum_exposure.text())/1000.0
                          
-            if not self.camera_controller.start_acquisition(em_gain, amp_gain):
+            if not self.camera_controller.start_acquisition(em_gain, amp_gain, exposure_time):
                 raise Exception("Failed to start camera acquisition")
-            
-            # Start image acquisition service (need to start first so that first triggered image is read)
-            self.acq_service = ImageAcquisitionService(
-                self.camera_controller.camera,
-                self.logger
-            )
-            self.acq_service.set_frame_timeout(freq)  # Set appropriate timeout
-            self.acq_service.image_acquired.connect(self.handle_new_image)
-            self.acq_service.acquisition_error.connect(self.handle_acquisition_error)
-            self.acq_service.set_active_modes(active_modes)
-            self.acq_service.set_save_enabled(self.save_toggle.isChecked())
-            self.acq_service.start()
 
             # Start NI-DAQ
-            freq = self.state_manager.state.current_frequency
             modes = [
                 "Bioluminescence" in active_modes,
                 "Blue" in active_modes,
@@ -547,10 +529,19 @@ class MainWindow(QMainWindow):
             biolum_exp = int(self.biolum_exposure.text())
             fluo_exp = int(self.fluo_exposure.text())
             
-            if not self.daq_controller.start_task(freq, modes, biolum_exp, fluo_exp):
+            if not self.daq_controller.start_task(frequency, modes, biolum_exp, fluo_exp):
                 raise Exception("Failed to start DAQ task")
 
-
+            # Start image acquisition service
+            self.acq_service = ImageAcquisitionService(
+                self.camera_controller.camera,
+                self.logger
+            )
+            self.acq_service.image_acquired.connect(self.handle_new_image)
+            self.acq_service.acquisition_error.connect(self.handle_acquisition_error)
+            self.acq_service.set_active_modes(active_modes)
+            self.acq_service.set_save_enabled(self.save_toggle.isChecked())
+            self.acq_service.start()
             
             # Update UI
             self.start_button.setEnabled(False)
@@ -567,25 +558,18 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'acq_service'):
                 self.acq_service.stop()
                 
-                # Add debug logging for saved images
-                if hasattr(self.acq_service, 'saved_images'):
-                    for mode, images in self.acq_service.saved_images.items():
-                        self.logger.debug(f"Mode {mode}: {len(images) if images else 0} images collected")
-                
                 # Save data if enabled
                 if (self.save_toggle.isChecked() and 
                     hasattr(self.acq_service, 'saved_images') and 
                     any(len(imgs) > 0 for imgs in self.acq_service.saved_images.values())):
                     
-                    self.logger.info("Saving acquired images...")
-                    if not self.data_storage.save_path:
-                        self.logger.error("Cannot save: No save directory selected")
-                    else:
-                        success = self.data_storage.save_image_stacks(self.acq_service.saved_images)
-                        if not success:
-                            self.logger.error("Failed to save image stacks")
-                else:
-                    self.logger.warning("No images to save or saving disabled")
+                    self.logger.info("Saving acquired images and frame indices...")
+                    success = self.data_storage.save_image_stacks(
+                        self.acq_service.saved_images,
+                        self.acq_service.frame_indices
+                    )
+                    if not success:
+                        self.logger.error("Failed to save data")
                 
                 delattr(self, 'acq_service')
                 
@@ -606,25 +590,12 @@ class MainWindow(QMainWindow):
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             
-            # Clear current images and display
-            self.current_images = {
-                "Bioluminescence": None,
-                "Blue": None,
-                "Green": None
-            }
-            self.image_view.clear()
-            
-            # Reset display mode options to all possible modes
-            self.display_mode_combo.clear()
-            self.display_mode_combo.addItems(["Bioluminescence", "Blue", "Green"])
-            
             # Clear ROI data
-            self.roi_data = {
-                "Bioluminescence": [],
-                "Blue": [],
-                "Green": []
-            }
-            self.roi_plot.setData([])  # Clear plot
+            self.roi_data = {mode: [] for mode in ["Bioluminescence", "Blue", "Green"]}
+            self.roi_plot.setData([])
+            
+            # Reset display modes to match current checkbox state
+            self.update_display_modes()
             
         except Exception as e:
             self.logger.error(f"Error stopping acquisition: {e}")
@@ -659,16 +630,27 @@ class MainWindow(QMainWindow):
             view_box = self.image_view.getView()
             view_box.setAspectLocked(True, 1.0)  # Lock aspect ratio to 1:1
 
-    def update_display_modes(self, active_modes: List[str]):
-        """Update the display mode combo box with active modes"""
-        current = self.display_mode_combo.currentText()
+    def update_display_modes(self):
+        """Update display mode combo box based on checked modes"""
+        current_mode = self.display_mode_combo.currentText()
+        active_modes = []
+        
+        if self.biolum_check.isChecked():
+            active_modes.append("Bioluminescence")
+        if self.blue_check.isChecked():
+            active_modes.append("Blue")
+        if self.green_check.isChecked():
+            active_modes.append("Green")
+            
         self.display_mode_combo.clear()
         self.display_mode_combo.addItems(active_modes)
         
         # Try to restore previous selection if still available
-        index = self.display_mode_combo.findText(current)
+        index = self.display_mode_combo.findText(current_mode)
         if index >= 0:
             self.display_mode_combo.setCurrentIndex(index)
+        elif self.display_mode_combo.count() > 0:
+            self.display_mode_combo.setCurrentIndex(0)
 
     def on_display_mode_changed(self, mode: str):
         """Handle display mode selection change"""
