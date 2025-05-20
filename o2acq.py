@@ -324,6 +324,8 @@ class MainWindow(QMainWindow):
         self.browse_button.clicked.connect(self.browse_save_directory)
         save_layout.addWidget(self.browse_button)
         
+        self.save_toggle.stateChanged.connect(lambda state: self.state_manager.update_state(save_enabled=bool(state)))
+        
         save_group.setLayout(save_layout)
         layout.addWidget(save_group)
         
@@ -556,8 +558,21 @@ class MainWindow(QMainWindow):
         try:
             # Stop acquisition service
             if hasattr(self, 'acq_service'):
+                # Get saved images and frame indices before stopping
+                saved_images = self.acq_service.saved_images
+                frame_indices = self.acq_service.frame_indices
+                
+                # Stop the service
                 self.acq_service.stop()
                 delattr(self, 'acq_service')
+                
+                # Save data if saving was enabled
+                if self.save_toggle.isChecked() and self.data_storage.save_path:
+                    if saved_images and any(saved_images.values()):
+                        self.data_storage.save_image_stacks(saved_images, frame_indices)
+                        # Save metadata
+                        metadata = self.state_manager.get_metadata()
+                        self.data_storage.save_metadata(metadata, f"metadata_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
                 
             # Stop NI-DAQ
             self.daq_controller.stop_task()
